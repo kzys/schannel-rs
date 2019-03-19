@@ -9,6 +9,7 @@ extern crate winapi;
 extern crate lazy_static;
 
 use std::ptr;
+use std::mem;
 use winapi::ctypes;
 use winapi::shared::sspi;
 
@@ -84,4 +85,40 @@ unsafe fn secbuf_desc(bufs: &mut [sspi::SecBuffer]) -> sspi::SecBufferDesc {
         cBuffers: bufs.len() as ctypes::c_ulong,
         pBuffers: bufs.as_mut_ptr(),
     }
+}
+
+unsafe fn alpn_list(protos: &Vec<Vec<u8>>) -> Vec<u8> {
+    //the buffer is expected to not include packing but the structs are packed
+    //due to how they are defined, so we subract the size of a c_ushort, as this
+    //is how much padding the structure will have
+	//
+	//Ideally this would be const, but const fn is not stable yet
+    let sec_application_protocol_list_header_size: usize = mem::size_of::<sspi::SEC_APPLICATION_PROTOCOL_LIST>() - std::mem::size_of::<ctypes::c_ushort>();
+
+    let mut protocol_lists_size = 0;
+    for proto in protos {
+        protocol_lists_size += proto.len() + 1;
+    }
+    let mut buf = vec![0; mem::size_of::<sspi::SEC_APPLICATION_PROTOCOLS>() + sec_application_protocol_list_header_size + protocol_lists_size];
+    {
+        let protocols = buf.as_mut_ptr() as *mut sspi::SEC_APPLICATION_PROTOCOLS;
+        (*protocols).ProtocolListsSize = (sec_application_protocol_list_header_size + protocol_lists_size) as ctypes::c_ulong;
+    }
+    let mut offset = mem::size_of::<sspi::SEC_APPLICATION_PROTOCOLS>();
+    {
+        let protocol =
+            (&mut buf[offset..]).as_mut_ptr() as *mut sspi::SEC_APPLICATION_PROTOCOL_LIST;
+        (*protocol).ProtoNegoExt = sspi::SecApplicationProtocolNegotiationExt_ALPN;
+        (*protocol).ProtocolListSize = protocol_lists_size as ctypes::c_ushort;
+        offset += sec_application_protocol_list_header_size;
+    }
+    for proto in protos {
+        buf[offset] = proto.len() as u8;
+        offset += 1;
+        for &byte in proto {
+            buf[offset] = byte;
+            offset += 1;
+        }
+    }
+    buf
 }
